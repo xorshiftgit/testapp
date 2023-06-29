@@ -231,6 +231,9 @@ int main(int argc, char *argv[])
     FILE *fout = NULL;
     uint8_t *buf = NULL;
     uint8_t *xorbuf = NULL;
+    size_t total_len = 0;
+    size_t saved_total_len = 0;
+    char* end;
 
     int iflag = 0;
     char *filename = NULL;
@@ -238,17 +241,26 @@ int main(int argc, char *argv[])
     int c;
 
     opterr = 0;
-    while ((c = getopt (argc, argv, "if:")) != -1)
+    while ((c = getopt (argc, argv, "b:k:m:g:f:")) != -1)
         switch (c)
         {
-            case 'i':
-                iflag = 1;
+            case 'b':
+                total_len += strtoull(optarg, &end, 10);
+                break;
+            case 'k':
+                total_len += strtoull(optarg, &end, 10) * 1024;
+                break;
+            case 'm':
+                total_len += strtoull(optarg, &end, 10) * 1024 * 1024;
+                break;
+            case 'g':
+                total_len += strtoull(optarg, &end, 10) * 1024 * 1024 * 1024;
                 break;
             case 'f':
                 filename = optarg;
                 break;
             case '?':
-                if (optopt == 'f')
+                if (optopt == 'b' || optopt == 'k' || optopt == 'm' || optopt == 'g' || optopt == 'f')
                     fprintf (stderr, "Option -%c requires an argument.\n", optopt);
                 else
                     fprintf (stderr,
@@ -259,22 +271,13 @@ int main(int argc, char *argv[])
                 return 1;
         }
 
-    buf = (uint8_t *)malloc(BUF_LEN);
-    if (!buf)
-        return 2;
-
     if (!filename)
-        return 3;
+    {
+        fprintf (stderr, "Missing verify dev.\n");
+        return 1;
+    }
 
-    if (iflag)
-    {
-        fin = fout = fopen(filename, "rb+");
-    }
-    else
-    {
-        fin = fopen(filename, "rb");
-        fout = fopen("out.bin", "wb");
-    }
+    fout = stdout;
 
     uint8_t key[] = { 0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f };
     uint8_t iv[]  = { 0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f };
@@ -282,46 +285,77 @@ int main(int argc, char *argv[])
 
     TEST_init_ctx_iv(&ctx, key, iv);
 
+    buf = (uint8_t *)malloc(BUF_LEN);
+    if (!buf)
+        return 2;
+
     xorbuf = (uint8_t *)malloc(BUF_LEN);
     if (!xorbuf)
         return 2;
 
+    fin = fopen(filename, "rb");
+
     memset(xorbuf, 0xff, BUF_LEN);
 
-    size_t len = 1;
-    if (iflag)
+    int ret = 0;
+
+    saved_total_len = total_len;
+
+    size_t len;
+
+    while(total_len > 0)
     {
-        while (len != 0)
+        for(long i=0;i<BUF_LEN/16;i++)
         {
-            for(long i=0;i<BUF_LEN/16;i++)
-            {
-                TEST_next_iv(&ctx);
-                memcpy(&xorbuf[i*16], ctx.Iv, 16);
-            }
-            off_t pos = ftello(fin);
-            len = fread(buf, 1, BUF_LEN, fin);
-            fseeko(fin, pos, SEEK_SET);
-            xorcpy(buf, xorbuf, BUF_LEN);
-            fwrite(buf, 1, len, fin);
+            TEST_next_iv(&ctx);
+            memcpy(&xorbuf[i*16], ctx.Iv, 16);
         }
+
+        if (total_len >= BUF_LEN)
+        {
+            len = BUF_LEN;
+        }
+        else
+        {
+            len = total_len;
+        }
+
+        size_t len_r = fread(buf, 1, BUF_LEN, fin);
+        if (len_r != len)
+        {
+            ret = 1;
+            break;
+        }
+
+        if (memcmp(buf, xorbuf, len) != 0)
+        {
+            ret = 1;
+            break;
+        }
+
+        total_len -= len;
+    }
+
+    if (!ret)
+    {
+        printf("OK\n");
     }
     else
     {
-        while (len != 0)
+        size_t i;
+        off_t pos = saved_total_len - total_len;
+        for (i=0;i<len;i++)
         {
-            for(long i=0;i<BUF_LEN/16;i++)
-            {
-                TEST_next_iv(&ctx);
-                memcpy(&xorbuf[i*16], ctx.Iv, 16);
-            }
-            len = fread(buf, 1, BUF_LEN, fin);
-            xorcpy(buf, xorbuf, BUF_LEN);
-            fwrite(buf, 1, len, fout);
+            if(buf[i] != xorbuf[i])
+                break;
         }
+        printf("Mismatch at %jd\n", (intmax_t)pos+i);
     }
 
     free(xorbuf);
     free(buf);
+
+    fclose(fin);
 
     return 0;
 }
