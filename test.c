@@ -227,28 +227,30 @@ unsigned char* xorcpy(unsigned char* dst, const unsigned char* src, unsigned blo
 
 int main(int argc, char *argv[])
 {
-    FILE *fin = NULL;
-    FILE *fout = NULL;
-    uint8_t *buf = NULL;
+    FILE *fin1 = NULL;
+    FILE *fin2 = NULL;
+    uint8_t *buf1 = NULL;
+    uint8_t *buf2 = NULL;
     uint8_t *xorbuf = NULL;
 
     int iflag = 0;
-    char *filename = NULL;
+    char *filename1 = NULL;
+    char *filename2 = NULL;
     int index;
     int c;
 
     opterr = 0;
-    while ((c = getopt (argc, argv, "if:")) != -1)
+    while ((c = getopt (argc, argv, "a:b:")) != -1)
         switch (c)
         {
-            case 'i':
-                iflag = 1;
+            case 'a':
+                filename1 = optarg;
                 break;
-            case 'f':
-                filename = optarg;
+            case 'b':
+                filename2 = optarg;
                 break;
             case '?':
-                if (optopt == 'f')
+                if (optopt == 'a' || optopt == 'b')
                     fprintf (stderr, "Option -%c requires an argument.\n", optopt);
                 else
                     fprintf (stderr,
@@ -259,22 +261,16 @@ int main(int argc, char *argv[])
                 return 1;
         }
 
-    buf = (uint8_t *)malloc(BUF_LEN);
-    if (!buf)
+    buf1 = (uint8_t *)malloc(BUF_LEN);
+    if (!buf1)
         return 2;
 
-    if (!filename)
-        return 3;
+    buf2 = (uint8_t *)malloc(BUF_LEN);
+    if (!buf2)
+        return 2;
 
-    if (iflag)
-    {
-        fin = fout = fopen(filename, "rb+");
-    }
-    else
-    {
-        fin = fopen(filename, "rb");
-        fout = fopen("out.bin", "wb");
-    }
+    fin1 = fopen(filename1, "rb");
+    fin2 = fopen(filename2, "rb");
 
     uint8_t key[] = { 0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f };
     uint8_t iv[]  = { 0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f };
@@ -288,40 +284,56 @@ int main(int argc, char *argv[])
 
     memset(xorbuf, 0xff, BUF_LEN);
 
-    size_t len = 1;
-    if (iflag)
+    size_t len1 = 1;
+    size_t len2 = 1;
+
+    int ret = 0;
+
+    while (len1 != 0)
     {
-        while (len != 0)
+        for(long i=0;i<BUF_LEN/16;i++)
         {
-            for(long i=0;i<BUF_LEN/16;i++)
-            {
-                TEST_next_iv(&ctx);
-                memcpy(&xorbuf[i*16], ctx.Iv, 16);
-            }
-            off_t pos = ftello(fin);
-            len = fread(buf, 1, BUF_LEN, fin);
-            fseeko(fin, pos, SEEK_SET);
-            xorcpy(buf, xorbuf, BUF_LEN);
-            fwrite(buf, 1, len, fin);
+            TEST_next_iv(&ctx);
+            memcpy(&xorbuf[i*16], ctx.Iv, 16);
         }
+        len1 = fread(buf1, 1, BUF_LEN, fin1);
+        len2 = fread(buf2, 1, BUF_LEN, fin2);
+        if (len1 != len2)
+        {
+            ret = 1;
+            break;
+        }
+        xorcpy(buf1, buf2, len1);
+        if (memcmp(buf1, xorbuf, len1) != 0)
+        {
+            ret = 1;
+            break;
+        }
+    }
+
+    if (!ret)
+    {
+        printf("OK\n");
     }
     else
     {
-        while (len != 0)
+        size_t i;
+        off_t pos1 = ftello(fin1)-len1;
+        off_t pos2 = ftello(fin2)-len1;
+        for (i=0;i<len1;i++)
         {
-            for(long i=0;i<BUF_LEN/16;i++)
-            {
-                TEST_next_iv(&ctx);
-                memcpy(&xorbuf[i*16], ctx.Iv, 16);
-            }
-            len = fread(buf, 1, BUF_LEN, fin);
-            xorcpy(buf, xorbuf, BUF_LEN);
-            fwrite(buf, 1, len, fout);
+            if(buf1[i] != xorbuf[i])
+                break;
         }
+        printf("Mismatch %jd %jd\n", (intmax_t)pos1+i, (intmax_t)pos2+i);
     }
 
     free(xorbuf);
-    free(buf);
+    free(buf1);
+    free(buf2);
 
-    return 0;
+    fclose(fin1);
+    fclose(fin2);
+
+    return ret;
 }
