@@ -227,10 +227,11 @@ unsigned char* xorcpy(unsigned char* dst, const unsigned char* src, unsigned blo
 
 int main(int argc, char *argv[])
 {
-    FILE *fin = NULL;
     FILE *fout = NULL;
     uint8_t *buf = NULL;
     uint8_t *xorbuf = NULL;
+    size_t total_len = 0;
+    char* end;
 
     int iflag = 0;
     char *filename = NULL;
@@ -238,17 +239,23 @@ int main(int argc, char *argv[])
     int c;
 
     opterr = 0;
-    while ((c = getopt (argc, argv, "if:")) != -1)
+    while ((c = getopt (argc, argv, "b:k:m:g:")) != -1)
         switch (c)
         {
-            case 'i':
-                iflag = 1;
+            case 'b':
+                total_len += strtoull(optarg, &end, 10);
                 break;
-            case 'f':
-                filename = optarg;
+            case 'k':
+                total_len += strtoull(optarg, &end, 10) * 1024;
+                break;
+            case 'm':
+                total_len += strtoull(optarg, &end, 10) * 1024 * 1024;
+                break;
+            case 'g':
+                total_len += strtoull(optarg, &end, 10) * 1024 * 1024 * 1024;
                 break;
             case '?':
-                if (optopt == 'f')
+                if (optopt == 'b' || optopt == 'k' || optopt == 'm' || optopt == 'g')
                     fprintf (stderr, "Option -%c requires an argument.\n", optopt);
                 else
                     fprintf (stderr,
@@ -259,22 +266,7 @@ int main(int argc, char *argv[])
                 return 1;
         }
 
-    buf = (uint8_t *)malloc(BUF_LEN);
-    if (!buf)
-        return 2;
-
-    if (!filename)
-        return 3;
-
-    if (iflag)
-    {
-        fin = fout = fopen(filename, "rb+");
-    }
-    else
-    {
-        fin = fopen(filename, "rb");
-        fout = fopen("out.bin", "wb");
-    }
+    fout = stdout;
 
     uint8_t key[] = { 0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f };
     uint8_t iv[]  = { 0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f };
@@ -288,40 +280,27 @@ int main(int argc, char *argv[])
 
     memset(xorbuf, 0xff, BUF_LEN);
 
-    size_t len = 1;
-    if (iflag)
+    while(total_len > 0)
     {
-        while (len != 0)
+        for(long i=0;i<BUF_LEN/16;i++)
         {
-            for(long i=0;i<BUF_LEN/16;i++)
-            {
-                TEST_next_iv(&ctx);
-                memcpy(&xorbuf[i*16], ctx.Iv, 16);
-            }
-            off_t pos = ftello(fin);
-            len = fread(buf, 1, BUF_LEN, fin);
-            fseeko(fin, pos, SEEK_SET);
-            xorcpy(buf, xorbuf, BUF_LEN);
-            fwrite(buf, 1, len, fin);
+            TEST_next_iv(&ctx);
+            memcpy(&xorbuf[i*16], ctx.Iv, 16);
         }
-    }
-    else
-    {
-        while (len != 0)
+        size_t len;
+        if (total_len >= BUF_LEN)
         {
-            for(long i=0;i<BUF_LEN/16;i++)
-            {
-                TEST_next_iv(&ctx);
-                memcpy(&xorbuf[i*16], ctx.Iv, 16);
-            }
-            len = fread(buf, 1, BUF_LEN, fin);
-            xorcpy(buf, xorbuf, BUF_LEN);
-            fwrite(buf, 1, len, fout);
+            len = BUF_LEN;
         }
+        else
+        {
+            len = total_len;
+        }
+        fwrite(xorbuf, 1, len, fout);
+        total_len -= len;
     }
 
     free(xorbuf);
-    free(buf);
 
     return 0;
 }
